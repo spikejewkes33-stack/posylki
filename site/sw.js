@@ -38,7 +38,8 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     caches.open(CACHE).then(async (cache) => {
       const cached = await cache.match(event.request, { ignoreSearch: true });
-      const network = fetch(event.request)
+      // no-cache: сверяться с сервером, а не с 10-минутным кэшем GitHub Pages.
+      const network = fetch(event.request.url, { cache: 'no-cache' })
         .then((res) => {
           if (res.ok) cache.put(event.request, res.clone());
           return res;
