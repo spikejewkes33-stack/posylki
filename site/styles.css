@@ -39,6 +39,16 @@ button, .btn, input, textarea { font: inherit; }
 
 /* Заголовок главного экрана */
 .app-head { margin: 4px 2px 12px; }
+.app-head .banner {
+  margin: 0 0 10px;
+  color: #d0021b;
+  font-size: 30px;
+  font-weight: 900;
+  line-height: 1.1;
+  text-transform: uppercase;
+  white-space: normal;
+  overflow: visible;
+}
 .app-head h1 { font-size: 32px; font-weight: 800; margin: 0; letter-spacing: -0.01em; }
 .app-head p { margin: 2px 0 0; color: var(--muted); font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 

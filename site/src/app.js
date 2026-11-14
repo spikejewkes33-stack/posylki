@@ -70,6 +70,7 @@ function renderHome() {
   const lists = store.state.lists.map((l) => l.title).join(' · ');
   app.innerHTML = `
     <header class="app-head">
+      <p class="banner">как жаль сегодня Илонину жопу вечером</p>
       <h1>📦 Посылки</h1>
       <p>${lists ? esc(lists) : 'Приёмка посылок по штрихкоду'}</p>
     </header>
