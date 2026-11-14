@@ -15,7 +15,16 @@ function uid() {
 export function createStore(storage = globalThis.localStorage) {
   let state = emptyState();
   let index = new Map();
+  let shapes = { prefixes: new Set(), lengths: new Set() };
   const listeners = new Set();
+  const prefixOf = (code) => code.match(/^[A-Z]*/)[0];
+  const indexAll = () => {
+    index = buildIndex(state.items);
+    shapes = {
+      prefixes: new Set(state.items.map((it) => prefixOf(it.track))),
+      lengths: new Set(state.items.map((it) => it.track.length)),
+    };
+  };
 
   try {
     const raw = storage?.getItem(KEY);
@@ -23,10 +32,10 @@ export function createStore(storage = globalThis.localStorage) {
   } catch {
     state = emptyState();
   }
-  index = buildIndex(state.items);
+  indexAll();
 
   function commit() {
-    index = buildIndex(state.items);
+    indexAll();
     try {
       storage?.setItem(KEY, JSON.stringify(state));
     } catch (err) {
@@ -47,6 +56,12 @@ export function createStore(storage = globalThis.localStorage) {
     /** Трек из списка для текста штрихкода или null. */
     lookup(code) {
       return findTrackInCode(code, index)?.track ?? null;
+    },
+
+    /** Насколько чужой код похож на треки списка: те же буквы в начале (+2), та же длина (+1). */
+    shapeScore(code) {
+      const norm = normalizeTrack(code);
+      return (shapes.prefixes.has(prefixOf(norm)) ? 2 : 0) + (shapes.lengths.has(norm.length) ? 1 : 0);
     },
 
     /** Добавляет разобранную заметку. Позиции, которые уже есть (тот же трек, товар и получатель), пропускает. */

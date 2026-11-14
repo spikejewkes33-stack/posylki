@@ -109,6 +109,18 @@ test('фильтр кадров: чужая коробка сразу после
   assert.deepEqual(events.map((e) => e.type), ['match', 'unknown']);
 });
 
+test('фильтр кадров: чужая наклейка с треком и номером заказа — один красный, с треком', () => {
+  const store = createStore(memoryStorage());
+  store.importParsed(parseNote(NOTE), 'Список');
+  const f = new ScanFilter({ unknownDelayMs: 700 });
+  const frame = ['5127196179821070646', 'JT5599887766554', 'JT5599887766554', '收件人 广东省'];
+  const events = [];
+  for (let t = 0; t <= 3000; t += 100) {
+    events.push(...f.feed(frame, t, (c) => store.lookup(c), (c) => store.shapeScore(c)));
+  }
+  assert.deepEqual(events, [{ type: 'unknown', code: 'JT5599887766554' }]);
+});
+
 test('фильтр кадров: чужой трек краснеет только после задержки', () => {
   const f = new ScanFilter({ unknownDelayMs: 700 });
   const lookup = () => null;

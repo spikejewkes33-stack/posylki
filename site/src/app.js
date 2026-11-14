@@ -396,7 +396,7 @@ function handleCodes(codes, manual, now = performance.now()) {
         const track = store.lookup(code);
         return track ? { type: 'match', code, track } : { type: 'unknown', code };
       })
-    : scan.filter.feed(codes, now, (c) => store.lookup(c));
+    : scan.filter.feed(codes, now, (c) => store.lookup(c), (c) => store.shapeScore(c));
   for (const ev of events) showResult(ev);
 }
 
