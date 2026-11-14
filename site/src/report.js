@@ -1,6 +1,7 @@
-// Отчёт о приёмке и текст для вставки обратно в заметку.
+// Отчёт о приёмке: текст, таблица Excel, PDF и текст для вставки обратно в заметку.
+// Всё строится из «вида» { title, items, unknown, log }: все активные закупки или одна (store.view).
 
-function fmtTime(ts) {
+export function fmtTime(ts) {
   const d = new Date(ts);
   const p = (n) => String(n).padStart(2, '0');
   return `${p(d.getDate())}.${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
@@ -22,27 +23,27 @@ function itemLine(it) {
   return [it.n ? `${it.n}.` : '', it.name, it.track].filter(Boolean).join(' ');
 }
 
-/** Данные отчёта: и для экрана, и для текста. */
-export function reportData(state) {
-  const waiting = state.items.filter((it) => !it.arrivedAt);
+/** Данные отчёта: и для экрана, и для текста. Повторы считаются только по трекам этого вида. */
+export function reportData(view) {
+  const waiting = view.items.filter((it) => !it.arrivedAt);
+  const byTrack = new Map(view.items.map((it) => [it.track, it]));
   const counts = new Map();
-  for (const e of state.log) {
-    if (e.result === 'repeat') counts.set(e.track, (counts.get(e.track) || 0) + 1);
+  for (const e of view.log) {
+    if (e.result === 'repeat' && byTrack.has(e.track)) counts.set(e.track, (counts.get(e.track) || 0) + 1);
   }
-  const byTrack = new Map(state.items.map((it) => [it.track, it]));
   return {
-    total: state.items.length,
-    arrived: state.items.length - waiting.length,
+    total: view.items.length,
+    arrived: view.items.length - waiting.length,
     waiting,
-    unknown: state.unknown,
+    unknown: view.unknown,
     repeats: [...counts].map(([track, count]) => ({ track, count, item: byTrack.get(track) })),
   };
 }
 
-export function buildReport(state, now = Date.now()) {
-  const d = reportData(state);
+export function buildReport(view, now = Date.now()) {
+  const d = reportData(view);
   const out = [];
-  out.push(`ОТЧЁТ О ПРИЁМКЕ · ${fmtTime(now)}`);
+  out.push(`ОТЧЁТ О ПРИЁМКЕ${view.title ? ` · ${view.title}` : ''} · ${fmtTime(now)}`);
   out.push('');
   out.push(`Всего в списке: ${d.total}`);
   out.push(`Приехало: ${d.arrived}`);
@@ -74,27 +75,10 @@ export function buildReport(state, now = Date.now()) {
   return out.join('\n');
 }
 
-// Таблица для Excel (CSV, «;», с BOM). Трек записан как ="…", чтобы Excel не превратил его в число.
-export function buildCsv(state) {
-  const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const text = (v) => `"=""${String(v).replace(/"/g, '')}"""`;
-  const rows = [['Закупка', 'Получатель', '№', 'Товар', 'Трек-номер', 'Статус', 'Когда'].map(cell).join(';')];
-  for (const it of state.items) {
-    rows.push(
-      [cell(it.list), cell(it.recipient), cell(it.n), cell(it.name), text(it.track),
-        cell(it.arrivedAt ? 'Приехал' : 'Ожидается'), cell(it.arrivedAt ? fmtTime(it.arrivedAt) : '')].join(';'),
-    );
-  }
-  for (const u of state.unknown) {
-    rows.push(['', '', '', cell('НЕТ В СПИСКЕ'), text(u.code), cell(`Сканировали ${u.count} раз`), cell(fmtTime(u.lastAt))].join(';'));
-  }
-  return '﻿' + rows.join('\r\n');
-}
-
 // Текст заметки с отметками: «✅» у приехавших. Можно вставить в новую заметку.
-export function buildNoteText(state) {
+export function buildNoteText(view) {
   const out = [];
-  for (const [list, recipients] of groupItems(state.items)) {
+  for (const [list, recipients] of groupItems(view.items)) {
     out.push(list, '');
     for (const [recipient, items] of recipients) {
       if (recipient) out.push(recipient);
@@ -103,4 +87,88 @@ export function buildNoteText(state) {
     }
   }
   return out.join('\n').trim();
+}
+
+// ---------- Excel ----------
+// Листы для write-excel-file. Всё, кроме счётчика, — текст (type: String): у трека целы ведущие нули и буквы.
+const head = (value) => ({ value, fontWeight: 'bold' });
+const text = (value) => ({ type: String, value: String(value ?? '') });
+
+export function excelSheets(view) {
+  const rows = [['Закупка', 'Получатель', '№', 'Товар', 'Трек-номер', 'Статус', 'Когда'].map(head)];
+  for (const it of view.items) {
+    rows.push([
+      text(it.list), text(it.recipient), text(it.n), text(it.name), text(it.track),
+      text(it.arrivedAt ? 'Приехал' : 'Ожидается'), text(it.arrivedAt ? fmtTime(it.arrivedAt) : ''),
+    ]);
+  }
+  const sheets = [{
+    data: rows,
+    sheet: 'Посылки',
+    columns: [{ width: 18 }, { width: 20 }, { width: 5 }, { width: 28 }, { width: 22 }, { width: 11 }, { width: 12 }],
+    stickyRowsCount: 1,
+  }];
+  if (view.unknown.length) {
+    const unknown = [['Трек-номер', 'Сколько раз', 'Первый раз', 'Последний раз'].map(head)];
+    for (const u of view.unknown) {
+      unknown.push([text(u.code), { type: Number, value: u.count }, text(fmtTime(u.firstAt)), text(fmtTime(u.lastAt))]);
+    }
+    sheets.push({ data: unknown, sheet: 'Нет в списке', columns: [{ width: 24 }, { width: 12 }, { width: 13 }, { width: 13 }], stickyRowsCount: 1 });
+  }
+  return sheets;
+}
+
+// ---------- PDF ----------
+// Описание документа для pdfmake. Шрифт Roboto с кириллицей подключает приложение (src/files.js).
+function table(header, rows, widths) {
+  return {
+    table: { headerRows: 1, widths, body: [header.map((t) => ({ text: t, bold: true })), ...rows] },
+    layout: 'lightHorizontalLines',
+    margin: [0, 4, 0, 14],
+  };
+}
+
+const str = (v) => String(v ?? '');
+
+export function pdfDoc(view, now = Date.now()) {
+  const d = reportData(view);
+  const content = [
+    { text: `Отчёт о приёмке${view.title ? ` · ${view.title}` : ''}`, fontSize: 16, bold: true },
+    { text: fmtTime(now), color: '#646a73', margin: [0, 2, 0, 10] },
+    table(
+      ['Всего', 'Приехало', 'Осталось', 'Нет в списке', 'Повторно'],
+      [[d.total, d.arrived, d.waiting.length, d.unknown.length, d.repeats.length].map((n) => ({ text: str(n), fontSize: 14 }))],
+      ['*', '*', '*', '*', '*'],
+    ),
+  ];
+  if (d.waiting.length) {
+    content.push({ text: `Ещё не приехали · ${d.waiting.length}`, fontSize: 13, bold: true });
+    content.push(table(
+      ['Закупка', 'Получатель', '№', 'Товар', 'Трек-номер'],
+      d.waiting.map((it) => [it.list, it.recipient, it.n, it.name, it.track].map(str)),
+      ['auto', 'auto', 'auto', '*', 'auto'],
+    ));
+  } else {
+    content.push({ text: 'Всё приехало', fontSize: 13, bold: true, color: '#188a42', margin: [0, 0, 0, 14] });
+  }
+  if (d.unknown.length) {
+    content.push({ text: `Отсканированы, но нет в списке · ${d.unknown.length}`, fontSize: 13, bold: true });
+    content.push(table(['Трек-номер', 'Сколько раз', 'Последний раз'], d.unknown.map((u) => [u.code, str(u.count), fmtTime(u.lastAt)]), ['*', 'auto', 'auto']));
+  }
+  if (d.repeats.length) {
+    content.push({ text: `Сканировали повторно · ${d.repeats.length}`, fontSize: 13, bold: true });
+    content.push(table(
+      ['Трек-номер', 'Товар', 'Получатель', 'Повторов'],
+      d.repeats.map(({ track, count, item }) => [track, item?.name, item?.recipient, count].map(str)),
+      ['auto', '*', 'auto', 'auto'],
+    ));
+  }
+  return {
+    pageSize: 'A4',
+    pageMargins: [32, 32, 32, 40],
+    defaultStyle: { font: 'Roboto', fontSize: 9 },
+    info: { title: 'Отчёт о приёмке' },
+    content,
+    footer: (page, pages) => ({ text: `${page} / ${pages}`, alignment: 'center', fontSize: 8, color: '#646a73' }),
+  };
 }

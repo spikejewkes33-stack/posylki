@@ -1,8 +1,10 @@
-// Экраны приложения. Маршрут в адресе: #/, #/scan, #/list/all|arrived|waiting, #/unknown, #/import, #/report
+// Экраны приложения. Маршрут в адресе: #/, #/scan, #/list/all|arrived|waiting[/закупка], #/unknown, #/import,
+// #/report[/закупка], #/lists, #/purchase/<id|all>, #/history, #/backup
 import { parseNote } from './parse.js';
 import { createStore } from './store.js';
 import { ScanFilter } from './scanfilter.js';
-import { buildReport, buildNoteText, buildCsv, groupItems, reportData } from './report.js';
+import { buildReport, buildNoteText, groupItems, reportData, fmtTime } from './report.js';
+import { makeXlsx, makePdf, shareFile, preloadExports, XLSX_TYPE } from './files.js';
 import { openCamera, closeCamera, createScanLoop, decodeImage, torchControl, zoomControl, listCameras } from './scanner.js';
 import { unlockAudio, signal, soundOn, setSound } from './feedback.js';
 
@@ -15,11 +17,12 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const $ = (sel, root = app) => root.querySelector(sel);
 const go = (hash) => (location.hash = hash);
 
-function fmtTime(ts) {
-  const d = new Date(ts);
-  const p = (n) => String(n).padStart(2, '0');
-  return `${p(d.getDate())}.${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
-}
+const pad = (n) => String(n).padStart(2, '0');
+const today = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+const purchaseHash = (id) => `#/purchase/${encodeURIComponent(id)}`;
 
 function toast(text) {
   const el = document.createElement('div');
@@ -38,21 +41,28 @@ async function copyText(text, done = 'Скопировано') {
   }
 }
 
-async function shareFile(name, type, content) {
-  const file = new File([content], name, { type });
-  if (navigator.canShare?.({ files: [file] })) {
-    try {
-      await navigator.share({ files: [file], title: name });
-      return;
-    } catch (err) {
-      if (err.name === 'AbortError') return;
-    }
-  }
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(file);
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+// Отдаёт файл через «Поделиться». Если телефон просит новое нажатие (файл собирался долго), показывает кнопку.
+async function deliver(name, type, content) {
+  const r = await shareFile(name, type, content);
+  if (r !== 'blocked') return r;
+  return new Promise((resolve) => {
+    sheet.innerHTML = `<form method="dialog" class="sheet"><p><b>Файл готов</b></p><p class="mono small">${esc(name)}</p>
+      <button class="primary" type="button" id="send">Отправить</button><button class="btn" value="">Отмена</button></form>`;
+    sheet.onclose = () => resolve('cancelled');
+    sheet.querySelector('#send').onclick = () => {
+      sheet.onclose = null;
+      resolve(shareFile(name, type, content)); // внутри нажатия: «Поделиться» откроется
+      sheet.close();
+    };
+    sheet.returnValue = '';
+    sheet.showModal();
+  });
+}
+
+async function saveBackup() {
+  const r = await deliver(`posylki-kopiya-${today()}.json`, 'application/json', store.exportBackup());
+  if (r === 'shared' || r === 'downloaded') store.markBackedUp();
+  return r;
 }
 
 function header(title, back = '#/') {
@@ -67,7 +77,7 @@ function itemTitle(it) {
 function renderHome() {
   const s = store.stats();
   const unknown = store.state.unknown.length;
-  const lists = store.state.lists.map((l) => l.title).join(' · ');
+  const lists = store.purchases().filter((p) => !p.archivedAt).map((p) => p.title).join(' · ');
   app.innerHTML = `
     <header class="app-head">
       <p class="banner">как жаль сегодня Илонину жопу вечером</p>
@@ -91,16 +101,23 @@ function renderHome() {
     </nav>
     <div class="row">
       <a class="btn" href="#/import">＋ Добавить список</a>
-      <a class="btn" href="#/report">Отчёт</a>
+      <a class="btn" href="#/lists">Закупки</a>
     </div>
-    <button class="link danger" id="clear">Очистить всё</button>`;
+    <div class="row">
+      <a class="btn" href="#/report">Отчёт</a>
+      <a class="btn" href="#/history">История</a>
+    </div>
+    <div class="row links">
+      <a class="link" href="#/backup">Резервная копия</a>
+      <button class="link danger" id="clear">Очистить всё</button>
+    </div>`;
   $('#scan').onclick = () => {
     unlockAudio();
     go('#/scan');
   };
   $('#clear').onclick = () => {
     if (!store.state.items.length && !store.state.unknown.length) return;
-    if (confirm('Удалить весь список, отметки и историю? Сначала лучше сохранить отчёт.')) {
+    if (confirm('Удалить все закупки, отметки и историю? Сначала лучше сохранить резервную копию.')) {
       store.clearAll();
       renderHome();
     }
@@ -175,15 +192,17 @@ function renderImport() {
 // ---------- списки ----------
 const LIST_TITLES = { all: 'Весь список', arrived: 'Приехали', waiting: 'Ожидаются' };
 
-function renderList(kind) {
+function renderList(kind, listId) {
+  const view = store.view(listId);
   app.innerHTML = `
-    ${header(LIST_TITLES[kind] || 'Список')}
+    ${header(LIST_TITLES[kind] || 'Список', listId ? purchaseHash(listId) : '#/')}
+    ${view.title ? `<p class="hint">${esc(view.title)}</p>` : ''}
     <input class="search" id="q" type="search" placeholder="Поиск: номер, товар, получатель" autocomplete="off">
     <div id="items"></div>`;
   const draw = () => {
     const q = $('#q').value.trim().toUpperCase().replace(/\s+/g, '');
     const qText = $('#q').value.trim().toLowerCase();
-    const items = store.state.items.filter((it) => {
+    const items = store.view(listId).items.filter((it) => {
       if (kind === 'arrived' && !it.arrivedAt) return false;
       if (kind === 'waiting' && it.arrivedAt) return false;
       if (!qText) return true;
@@ -282,9 +301,11 @@ function reportRow(it, side = '') {
     <span class="mono">${esc(it.track)}</span></span>${side ? `<small>${side}</small>` : ''}</div>`;
 }
 
-function renderReport() {
-  const text = buildReport(store.state);
-  const d = reportData(store.state);
+function renderReport(listId) {
+  const view = store.view(listId);
+  const single = view.id !== 'all';
+  const text = buildReport(view);
+  const d = reportData(view);
   let waitingHtml = '';
   for (const [list, recipients] of groupItems(d.waiting)) {
     waitingHtml += `<h3>${esc(list)}</h3>`;
@@ -293,21 +314,25 @@ function renderReport() {
       waitingHtml += items.map((it) => reportRow(it)).join('');
     }
   }
+  const stats = [
+    `<div class="stat"><b>${d.total}</b><span>Всего</span></div>`,
+    `<div class="stat ok"><b>${d.arrived}</b><span>Приехало</span></div>`,
+    `<div class="stat"><b>${d.waiting.length}</b><span>Осталось</span></div>`,
+    single ? '' : `<div class="stat bad"><b>${d.unknown.length}</b><span>Нет в списке</span></div>`,
+    `<div class="stat warn"><b>${d.repeats.length}</b><span>Повторно</span></div>`,
+  ].filter(Boolean);
   app.innerHTML = `
-    ${header('Отчёт о приёмке')}
-    <p class="hint">${fmtTime(Date.now())}</p>
-    <section class="report-stats">
-      <div class="stat"><b>${d.total}</b><span>Всего</span></div>
-      <div class="stat ok"><b>${d.arrived}</b><span>Приехало</span></div>
-      <div class="stat"><b>${d.waiting.length}</b><span>Осталось</span></div>
-      <div class="stat bad"><b>${d.unknown.length}</b><span>Нет в списке</span></div>
-      <div class="stat warn"><b>${d.repeats.length}</b><span>Повторно</span></div>
-    </section>
-    <div class="row wrap">
-      <button class="primary" id="copy">Скопировать отчёт</button>
-      <button class="btn" id="note">Текст для заметки ✅</button>
-      <button class="btn" id="csv">Таблица для Excel</button>
+    ${header('Отчёт о приёмке', single ? purchaseHash(view.id) : '#/')}
+    <p class="hint">${view.title ? `${esc(view.title)} · ` : ''}${fmtTime(Date.now())}</p>
+    <section class="report-stats" style="grid-template-columns:repeat(${stats.length},1fr)">${stats.join('')}</section>
+    ${store.needsBackup() ? `<div class="tip"><span>💾 Сохрани копию данных — на случай, если телефон их сотрёт.</span>
+      <button class="link" id="backup">Сохранить</button></div>` : ''}
+    <button class="primary" id="copy">Скопировать отчёт</button>
+    <div class="row">
+      <button class="btn" id="xlsx">Excel</button>
+      <button class="btn" id="pdf">PDF</button>
     </div>
+    <button class="btn wide" id="note">Текст для заметки ✅</button>
     ${d.waiting.length ? `<h2>Ещё не приехали · ${d.waiting.length}</h2>${waitingHtml}` : '<h2 class="ok-text">Всё приехало 🎉</h2>'}
     ${d.unknown.length ? `<h2>Нет в списке · ${d.unknown.length}</h2>${d.unknown
       .map((u) => `<div class="item is-bad"><i class="dot"></i><span><span class="mono">${esc(u.code)}</span></span>
@@ -318,9 +343,211 @@ function renderReport() {
         <span class="name">${item ? itemTitle(item) : ''}</span><span class="mono">${esc(track)}${item?.recipient ? ` · ${esc(item.recipient)}` : ''}</span></span>
         <small>повторов: ${count}</small></div>`)
       .join('')}` : ''}`;
+  preloadExports();
   $('#copy').onclick = () => copyText(text, 'Отчёт скопирован');
-  $('#note').onclick = () => copyText(buildNoteText(store.state), 'Скопировано. Вставь в новую заметку');
-  $('#csv').onclick = () => shareFile(`priyomka-${new Date().toISOString().slice(0, 10)}.csv`, 'text/csv', buildCsv(store.state));
+  $('#note').onclick = () => copyText(buildNoteText(view), 'Скопировано. Вставь в новую заметку');
+  $('#xlsx').onclick = (e) => exportReport(e.currentTarget, 'xlsx', view);
+  $('#pdf').onclick = (e) => exportReport(e.currentTarget, 'pdf', view);
+  $('#backup')?.addEventListener('click', async () => {
+    if ((await saveBackup()) !== 'cancelled') $('.tip')?.remove();
+  });
+}
+
+async function exportReport(btn, kind, view) {
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Готовлю…';
+  try {
+    const blob = kind === 'xlsx' ? await makeXlsx(view) : await makePdf(view);
+    await deliver(`priyomka-${today()}.${kind}`, kind === 'xlsx' ? XLSX_TYPE : 'application/pdf', blob);
+  } catch (err) {
+    console.error(err);
+    toast('Не получилось сделать файл');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
+// ---------- закупки ----------
+function plural(n, one, few, many) {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+
+function purchaseCard(p, href = purchaseHash(p.id)) {
+  return `<a class="purchase ${p.archivedAt ? 'is-archived' : ''}" href="${href}">
+    <b>${esc(p.title)}</b>
+    <span>${p.total} ${plural(p.total, 'посылка', 'посылки', 'посылок')} · приехало ${p.arrived}</span>
+    <div class="progress"><i style="width:${p.percent}%"></i></div></a>`;
+}
+
+function renderLists() {
+  const all = store.purchases();
+  const active = all.filter((p) => !p.archivedAt);
+  const archived = all.filter((p) => p.archivedAt);
+  app.innerHTML = `
+    ${header('Закупки')}
+    ${active.length > 1 ? purchaseCard({ title: 'Все активные', ...store.stats() }, '#/purchase/all') : ''}
+    <h2>Активные · ${active.length}</h2>
+    ${active.map((p) => purchaseCard(p)).join('') || '<p class="hint">Нет активных закупок.</p>'}
+    <a class="btn wide" href="#/import">＋ Добавить список</a>
+    ${archived.length ? `<h2>Архив · ${archived.length}</h2>
+      <p class="hint">Завершённые закупки. Сканер их не сверяет, на главном они не считаются.</p>
+      ${archived.map((p) => purchaseCard(p)).join('')}` : ''}`;
+}
+
+function renderPurchase(id) {
+  const isAll = id === 'all';
+  const p = isAll ? null : store.purchases().find((x) => x.id === id);
+  if (!isAll && !p) return go('#/lists');
+  const s = store.stats(id);
+  const q = isAll ? '' : `/${encodeURIComponent(id)}`;
+  app.innerHTML = `
+    ${header(isAll ? 'Все активные' : p.title, '#/lists')}
+    ${p?.archivedAt ? `<p class="note">В архиве с ${fmtTime(p.archivedAt)}. Сканер её не сверяет.</p>` : ''}
+    <section class="stats">
+      <div class="stat"><b>${s.total}</b><span>Всего</span></div>
+      <div class="stat ok"><b>${s.arrived}</b><span>Приехало</span></div>
+      <div class="stat"><b>${s.left}</b><span>Осталось</span></div>
+      <div class="stat"><b>${s.percent}%</b><span>Готово</span></div>
+      <div class="progress"><i style="width:${s.percent}%"></i></div>
+    </section>
+    <nav class="grid top">
+      <a class="tile" href="#/list/all${q}"><b>${s.total}</b>ВЕСЬ СПИСОК</a>
+      <a class="tile ok" href="#/list/arrived${q}"><b>${s.arrived}</b>ПРИЕХАЛИ</a>
+      <a class="tile wait" href="#/list/waiting${q}"><b>${s.left}</b>ОЖИДАЮТСЯ</a>
+      <a class="tile" href="#/report${q}"><b>📄</b>ОТЧЁТ</a>
+    </nav>
+    ${isAll ? '' : `
+      <button class="btn wide" id="archive">${p.archivedAt ? 'Вернуть в работу' : 'Завершить — убрать в архив'}</button>
+      <button class="link danger" id="delete">Удалить закупку</button>`}`;
+  if (isAll) return;
+  $('#archive').onclick = () => {
+    if (p.archivedAt) {
+      store.setArchived(id, false);
+      toast('Закупка снова в работе');
+    } else {
+      if (s.left && !confirm(`Ещё не приехали: ${s.left}. Всё равно завершить? Сканер перестанет сверять эту закупку.`)) return;
+      store.setArchived(id, true);
+      toast('Закупка в архиве');
+    }
+    renderPurchase(id);
+  };
+  $('#delete').onclick = () => {
+    const what = `${s.total} ${plural(s.total, 'посылку', 'посылки', 'посылок')}`;
+    if (!confirm(`Удалить закупку «${p.title}» целиком: ${what} с отметками? Вернуть можно только из резервной копии.`)) return;
+    store.deleteList(id);
+    toast('Закупка удалена');
+    go('#/lists');
+  };
+}
+
+// ---------- история сканирований ----------
+const LOG_FILTERS = [['all', 'Все'], ['found', 'Приехал'], ['repeat', 'Повтор'], ['unknown', 'Нет в списке']];
+const LOG_LABEL = { found: 'Приехал', repeat: 'Повтор', unknown: 'Нет в списке' };
+const LOG_PAGE = 200;
+
+function renderHistory() {
+  const log = store.state.log;
+  const byTrack = new Map();
+  for (const it of store.state.items) {
+    if (!byTrack.has(it.track)) byTrack.set(it.track, []);
+    byTrack.get(it.track).push(it);
+  }
+  const counts = { all: log.length };
+  for (const e of log) counts[e.result] = (counts[e.result] || 0) + 1;
+  let filter = 'all';
+  let limit = LOG_PAGE;
+  app.innerHTML = `
+    ${header('История сканирований')}
+    <div class="chips" id="chips">${LOG_FILTERS
+      .map(([k, t]) => `<button class="chip log-${k}" data-f="${k}">${t} <b>${counts[k] || 0}</b></button>`)
+      .join('')}</div>
+    <input class="search" id="q" type="search" placeholder="Поиск по номеру" autocomplete="off" autocapitalize="characters">
+    <div id="items"></div>`;
+  const draw = () => {
+    const q = $('#q').value.toUpperCase().replace(/\s+/g, '');
+    $('#chips').querySelectorAll('.chip').forEach((c) => c.classList.toggle('on', c.dataset.f === filter));
+    const rows = [];
+    for (let i = log.length - 1; i >= 0; i--) {
+      const e = log[i];
+      if (filter !== 'all' && e.result !== filter) continue;
+      if (q && !String(e.code).toUpperCase().includes(q) && !(e.track || '').includes(q)) continue;
+      rows.push(e);
+    }
+    const html = rows.slice(0, limit).map((e) => {
+      const items = (e.track && byTrack.get(e.track)) || [];
+      const it = items[0];
+      const more = items.length > 1 ? ` + ещё ${items.length - 1}` : '';
+      const about = it ? `${itemTitle(it)}${more}${it.recipient ? ` · ${esc(it.recipient)}` : ''}` : '';
+      return `<div class="item log-${esc(e.result)}"><i class="dot"></i><span>
+        <span class="name">${LOG_LABEL[e.result] || esc(e.result)}</span><span class="mono">${esc(e.code)}</span>
+        ${about ? `<small>${about}</small>` : ''}</span><small>${fmtTime(e.at)}</small></div>`;
+    }).join('');
+    $('#items').innerHTML = html
+      ? html + (rows.length > limit ? `<button class="btn wide" id="more">Показать ещё (${rows.length - limit})</button>` : '')
+      : `<p class="hint">${log.length ? 'Ничего не найдено.' : 'Сканирований ещё не было.'}</p>`;
+  };
+  $('#chips').onclick = (e) => {
+    const f = e.target.closest('.chip')?.dataset.f;
+    if (!f) return;
+    filter = f;
+    limit = LOG_PAGE;
+    draw();
+  };
+  $('#q').oninput = () => {
+    limit = LOG_PAGE;
+    draw();
+  };
+  $('#items').onclick = (e) => {
+    if (e.target.id !== 'more') return;
+    limit += LOG_PAGE;
+    draw();
+  };
+  draw();
+}
+
+// ---------- резервная копия ----------
+function renderBackup() {
+  const { lists, items, backupAt } = store.state;
+  app.innerHTML = `
+    ${header('Резервная копия')}
+    <p class="hint">Все закупки, отметки и история — в одном файле. Сохрани его в «Файлы» или отправь себе в Telegram.
+      Если телефон сотрёт данные, их можно вернуть из этого файла.</p>
+    <div class="card"><b>Сейчас в телефоне: ${lists.length} ${plural(lists.length, 'закупка', 'закупки', 'закупок')},
+      ${items.length} ${plural(items.length, 'посылка', 'посылки', 'посылок')}</b>
+      <p class="hint">${backupAt ? `Последняя копия: ${fmtTime(backupAt)}` : 'Копию ещё не сохраняли.'}</p></div>
+    <button class="primary" id="save">Сохранить копию</button>
+    <h2>Вернуть из копии</h2>
+    <p class="hint">Всё, что сейчас в телефоне, заменится данными из файла.</p>
+    <label class="btn wide">Выбрать файл копии<input type="file" id="file" accept=".json,application/json" hidden></label>`;
+  $('#save').onclick = async () => {
+    if ((await saveBackup()) !== 'cancelled') renderBackup();
+  };
+  $('#file').onchange = async (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f) return;
+    const text = await f.text();
+    let b;
+    try {
+      b = store.readBackup(text);
+    } catch (err) {
+      toast(err.message);
+      return;
+    }
+    const when = b.savedAt ? ` от ${fmtTime(b.savedAt)}` : '';
+    const msg = `Заменить всё?\n\nСейчас в телефоне: закупок ${lists.length}, посылок ${items.length}.\n`
+      + `В копии${when}: закупок ${b.lists}, посылок ${b.items}.\n\nТекущие данные пропадут.`;
+    if (!confirm(msg)) return;
+    store.restoreBackup(text);
+    toast('Данные восстановлены из копии');
+    go('#/');
+  };
 }
 
 // ---------- сканирование ----------
@@ -498,12 +725,16 @@ function route() {
   document.body.classList.remove('dark');
   sheet.onclose = null;
   if (sheet.open) sheet.close();
-  const [, page, arg] = (location.hash || '#/').split('/');
+  const [, page, arg, arg2] = (location.hash || '#/').split('/').map((p) => decodeURIComponent(p));
   if (page === 'scan') renderScan();
-  else if (page === 'list') renderList(arg);
+  else if (page === 'list') renderList(arg, arg2);
   else if (page === 'unknown') renderUnknown();
   else if (page === 'import') renderImport();
-  else if (page === 'report') renderReport();
+  else if (page === 'report') renderReport(arg);
+  else if (page === 'lists') renderLists();
+  else if (page === 'purchase') renderPurchase(arg);
+  else if (page === 'history') renderHistory();
+  else if (page === 'backup') renderBackup();
   else renderHome();
   window.scrollTo(0, 0);
 }

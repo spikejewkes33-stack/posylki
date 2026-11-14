@@ -1,6 +1,6 @@
 // Работа без интернета: все файлы приложения лежат в кэше телефона.
 // Открывается из кэша сразу, а в фоне проверяется новая версия (появится при следующем запуске).
-const CACHE = 'parcel-scanner-v1';
+const CACHE = 'parcel-scanner-v2';
 const FILES = [
   './',
   'index.html',
@@ -11,6 +11,10 @@ const FILES = [
   'icons/icon-512.png',
   'vendor/zxing-reader.js',
   'vendor/zxing_reader.wasm',
+  'vendor/write-excel-file.min.js',
+  'vendor/pdfmake.min.js',
+  'vendor/Roboto-Regular.ttf',
+  'vendor/Roboto-Medium.ttf',
   'src/app.js',
   'src/parse.js',
   'src/match.js',
@@ -19,10 +23,13 @@ const FILES = [
   'src/report.js',
   'src/scanner.js',
   'src/feedback.js',
+  'src/files.js',
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
+  // no-cache: брать свежие файлы, а не из 10-минутного кэша браузера.
+  const fresh = FILES.map((f) => new Request(f, { cache: 'no-cache' }));
+  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(fresh)).then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {

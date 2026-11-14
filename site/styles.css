@@ -281,3 +281,62 @@ dialog::backdrop { background: rgb(0 0 0 / 0.4); }
 @keyframes flash { from { opacity: 0.75; } to { opacity: 0; } }
 
 #haptic { position: fixed; left: -100px; top: 0; opacity: 0; pointer-events: none; }
+
+/* Нижние ссылки главного экрана */
+.row.links { margin: 4px 0 0; gap: 0; }
+.row.links .link { margin: 0; text-align: center; }
+.btn.wide { display: flex; width: 100%; margin: 10px 0; }
+.grid.top { margin: 12px 0; }
+
+/* Закупки */
+.purchase {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 10px;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--card);
+  border-left: 6px solid var(--accent);
+}
+.purchase b { font-size: 18px; }
+.purchase span { color: var(--muted); font-size: 15px; }
+.purchase.is-archived { border-left-color: var(--line); opacity: 0.75; }
+.note { background: var(--warn-bg); border-radius: 12px; padding: 10px 12px; margin: 4px 0 12px; font-size: 15px; }
+
+/* Подсказка «Сохрани копию» */
+.tip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 2px;
+  padding: 4px 4px 4px 12px;
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--muted);
+  font-size: 14px;
+}
+.tip span { flex: 1; }
+.tip .link { margin: 0; padding: 10px; font-weight: 600; }
+
+/* История сканирований */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 10px; }
+.chip {
+  min-height: 44px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 600;
+}
+.chip b { color: var(--muted); font-weight: 600; }
+.chip.on { background: var(--text); border-color: var(--text); color: #fff; }
+.chip.on b { color: #fff; }
+.item.log-found .dot { background: var(--ok); border-color: var(--ok); }
+.item.log-found .name { color: var(--ok); }
+.item.log-repeat .dot { background: var(--warn); border-color: var(--warn); }
+.item.log-repeat .name { color: #9a7400; }
+.item.log-unknown .dot { background: var(--bad); border-color: var(--bad); }
+.item.log-unknown .name { color: var(--bad); }
