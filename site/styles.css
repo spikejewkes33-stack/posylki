@@ -49,8 +49,8 @@ button, .btn, input, textarea { font: inherit; }
   white-space: normal;
   overflow: visible;
 }
-.app-head h1 { font-size: 32px; font-weight: 800; margin: 0; letter-spacing: -0.01em; }
-.app-head p { margin: 2px 0 0; color: var(--muted); font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.app-head h1 { font-size: 44px; font-weight: 800; margin: 0; letter-spacing: -0.01em; text-align: center; }
+.app-head p { margin: 2px 0 0; color: var(--muted); font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center; }
 
 /* Отчёт */
 .report-stats {
