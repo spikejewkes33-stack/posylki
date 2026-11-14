@@ -37,6 +37,28 @@ button, .btn, input, textarea { font: inherit; }
 .warn { color: var(--bad); }
 .ok-text { color: var(--ok); font-weight: 600; }
 
+/* Заголовок главного экрана */
+.app-head { margin: 4px 2px 12px; }
+.app-head h1 { font-size: 32px; font-weight: 800; margin: 0; letter-spacing: -0.01em; }
+.app-head p { margin: 2px 0 0; color: var(--muted); font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Отчёт */
+.report-stats {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 6px;
+  background: var(--card);
+  border-radius: var(--radius);
+  padding: 14px 8px;
+  margin-bottom: 4px;
+}
+.report-stats .stat b { font-size: 24px; }
+.report-stats .stat span { font-size: 11px; }
+.stat.bad b { color: var(--bad); }
+.stat.warn b { color: #b58800; }
+.who { font-weight: 600; margin: 10px 2px 6px; }
+.item.is-warn .dot { background: var(--warn); border-color: var(--warn); }
+
 /* Статистика */
 .stats {
   display: grid;

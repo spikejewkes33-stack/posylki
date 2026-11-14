@@ -75,6 +75,19 @@ export function torchControl(stream) {
 }
 
 /**
+ * Приближение камеры, если оно есть: мелкий штрихкод можно читать издалека, где камера в фокусе.
+ * Возвращает { levels, set(level) } или null.
+ */
+export function zoomControl(stream) {
+  const track = stream?.getVideoTracks()[0];
+  const caps = track?.getCapabilities?.();
+  if (!caps?.zoom || caps.zoom.max <= caps.zoom.min) return null;
+  const levels = [1, 2, 3].filter((z) => z >= caps.zoom.min && z <= caps.zoom.max);
+  if (levels.length < 2) return null;
+  return { levels, set: (z) => track.applyConstraints({ advanced: [{ zoom: z }] }) };
+}
+
+/**
  * Цикл распознавания: кадр → коды → onCodes(codes, now). Следующий кадр берётся, когда прошлый разобран.
  */
 export function createScanLoop(video, onCodes) {

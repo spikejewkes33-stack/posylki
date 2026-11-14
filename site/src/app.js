@@ -2,8 +2,8 @@
 import { parseNote } from './parse.js';
 import { createStore } from './store.js';
 import { ScanFilter } from './scanfilter.js';
-import { buildReport, buildNoteText, buildCsv, groupItems } from './report.js';
-import { openCamera, closeCamera, createScanLoop, decodeImage, torchControl, listCameras } from './scanner.js';
+import { buildReport, buildNoteText, buildCsv, groupItems, reportData } from './report.js';
+import { openCamera, closeCamera, createScanLoop, decodeImage, torchControl, zoomControl, listCameras } from './scanner.js';
 import { unlockAudio, signal, soundOn, setSound } from './feedback.js';
 
 const store = createStore();
@@ -67,7 +67,12 @@ function itemTitle(it) {
 function renderHome() {
   const s = store.stats();
   const unknown = store.state.unknown.length;
+  const lists = store.state.lists.map((l) => l.title).join(' · ');
   app.innerHTML = `
+    <header class="app-head">
+      <h1>📦 Посылки</h1>
+      <p>${lists ? esc(lists) : 'Приёмка посылок по штрихкоду'}</p>
+    </header>
     <section class="stats">
       <div class="stat"><b>${s.total}</b><span>Всего</span></div>
       <div class="stat ok"><b>${s.arrived}</b><span>Приехало</span></div>
@@ -271,16 +276,47 @@ function renderUnknown() {
 }
 
 // ---------- отчёт ----------
+function reportRow(it, side = '') {
+  return `<div class="item"><i class="dot"></i><span><span class="name">${itemTitle(it)}</span>
+    <span class="mono">${esc(it.track)}</span></span>${side ? `<small>${side}</small>` : ''}</div>`;
+}
+
 function renderReport() {
   const text = buildReport(store.state);
+  const d = reportData(store.state);
+  let waitingHtml = '';
+  for (const [list, recipients] of groupItems(d.waiting)) {
+    waitingHtml += `<h3>${esc(list)}</h3>`;
+    for (const [recipient, items] of recipients) {
+      if (recipient) waitingHtml += `<p class="who">${esc(recipient)}</p>`;
+      waitingHtml += items.map((it) => reportRow(it)).join('');
+    }
+  }
   app.innerHTML = `
     ${header('Отчёт о приёмке')}
+    <p class="hint">${fmtTime(Date.now())}</p>
+    <section class="report-stats">
+      <div class="stat"><b>${d.total}</b><span>Всего</span></div>
+      <div class="stat ok"><b>${d.arrived}</b><span>Приехало</span></div>
+      <div class="stat"><b>${d.waiting.length}</b><span>Осталось</span></div>
+      <div class="stat bad"><b>${d.unknown.length}</b><span>Нет в списке</span></div>
+      <div class="stat warn"><b>${d.repeats.length}</b><span>Повторно</span></div>
+    </section>
     <div class="row wrap">
       <button class="primary" id="copy">Скопировать отчёт</button>
       <button class="btn" id="note">Текст для заметки ✅</button>
       <button class="btn" id="csv">Таблица для Excel</button>
     </div>
-    <pre class="report">${esc(text)}</pre>`;
+    ${d.waiting.length ? `<h2>Ещё не приехали · ${d.waiting.length}</h2>${waitingHtml}` : '<h2 class="ok-text">Всё приехало 🎉</h2>'}
+    ${d.unknown.length ? `<h2>Нет в списке · ${d.unknown.length}</h2>${d.unknown
+      .map((u) => `<div class="item is-bad"><i class="dot"></i><span><span class="mono">${esc(u.code)}</span></span>
+        <small>${u.count > 1 ? `×${u.count}` : ''}</small></div>`)
+      .join('')}` : ''}
+    ${d.repeats.length ? `<h2>Сканировали повторно · ${d.repeats.length}</h2>${d.repeats
+      .map(({ track, count, item }) => `<div class="item is-warn"><i class="dot"></i><span>
+        <span class="name">${item ? itemTitle(item) : ''}</span><span class="mono">${esc(track)}${item?.recipient ? ` · ${esc(item.recipient)}` : ''}</span></span>
+        <small>повторов: ${count}</small></div>`)
+      .join('')}` : ''}`;
   $('#copy').onclick = () => copyText(text, 'Отчёт скопирован');
   $('#note').onclick = () => copyText(buildNoteText(store.state), 'Скопировано. Вставь в новую заметку');
   $('#csv').onclick = () => shareFile(`priyomka-${new Date().toISOString().slice(0, 10)}.csv`, 'text/csv', buildCsv(store.state));
@@ -301,6 +337,7 @@ function renderScan() {
         <button class="pill" id="done">Готово</button>
         <span class="pill" id="count">${s.arrived} из ${s.total}</span>
         <button class="pill" id="sound">${soundOn() ? '🔊' : '🔇'}</button>
+        <button class="pill" id="zoom" hidden>1×</button>
         <button class="pill" id="torch" hidden>🔦</button>
         <button class="pill" id="cam">📷</button>
       </header>
@@ -355,6 +392,17 @@ async function startScanning(deviceId) {
     torchBtn.onclick = () => {
       scan.torchOn = !scan.torchOn;
       torch(scan.torchOn).catch(() => {});
+    };
+  }
+  const zoom = zoomControl(scan.stream);
+  const zoomBtn = $('#zoom');
+  if (zoom && zoomBtn) {
+    let i = 0;
+    zoomBtn.hidden = false;
+    zoomBtn.onclick = () => {
+      i = (i + 1) % zoom.levels.length;
+      zoomBtn.textContent = `${zoom.levels[i]}×`;
+      zoom.set(zoom.levels[i]).catch(() => {});
     };
   }
   scan.loop = createScanLoop(video, (codes, now) => handleCodes(codes, false, now));

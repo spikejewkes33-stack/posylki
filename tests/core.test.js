@@ -54,6 +54,13 @@ test('трек остаётся строкой: ведущие нули, бук�
   assert.equal(normalizeTrack(' jt 5517710794659 '), 'JT5517710794659');
 });
 
+test('строка без названия товара: «3. ТРЕК»', () => {
+  const r = parseNote('Закуп 14.11\nИл\n1. YT7640469574885\n3. 6932554458157');
+  assert.equal(r.items[1].n, '3');
+  assert.equal(r.items[1].name, '');
+  assert.equal(r.items[1].recipient, 'Ил');
+});
+
 test('Markdown-чек-лист: отмеченные пункты приходят как приехавшие', () => {
   const r = parseNote('Закуп\nСева\n- [x] 1. Чехол 777456551825815\n- [ ] 2. Бумажник YT0720585696371');
   assert.equal(r.items[0].checked, true);

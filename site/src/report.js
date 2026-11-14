@@ -22,27 +22,37 @@ function itemLine(it) {
   return [it.n ? `${it.n}.` : '', it.name, it.track].filter(Boolean).join(' ');
 }
 
-export function buildReport(state, now = Date.now()) {
-  const total = state.items.length;
-  const arrived = state.items.filter((it) => it.arrivedAt);
+/** Данные отчёта: и для экрана, и для текста. */
+export function reportData(state) {
   const waiting = state.items.filter((it) => !it.arrivedAt);
-  const repeats = new Map();
+  const counts = new Map();
   for (const e of state.log) {
-    if (e.result === 'repeat') repeats.set(e.track, (repeats.get(e.track) || 0) + 1);
+    if (e.result === 'repeat') counts.set(e.track, (counts.get(e.track) || 0) + 1);
   }
+  const byTrack = new Map(state.items.map((it) => [it.track, it]));
+  return {
+    total: state.items.length,
+    arrived: state.items.length - waiting.length,
+    waiting,
+    unknown: state.unknown,
+    repeats: [...counts].map(([track, count]) => ({ track, count, item: byTrack.get(track) })),
+  };
+}
 
+export function buildReport(state, now = Date.now()) {
+  const d = reportData(state);
   const out = [];
   out.push(`ОТЧЁТ О ПРИЁМКЕ · ${fmtTime(now)}`);
   out.push('');
-  out.push(`Всего в списке: ${total}`);
-  out.push(`Приехало: ${arrived.length}`);
-  out.push(`Осталось: ${waiting.length}`);
-  out.push(`Нет в списке: ${state.unknown.length}`);
-  out.push(`Сканировали повторно: ${repeats.size}`);
+  out.push(`Всего в списке: ${d.total}`);
+  out.push(`Приехало: ${d.arrived}`);
+  out.push(`Осталось: ${d.waiting.length}`);
+  out.push(`Нет в списке: ${d.unknown.length}`);
+  out.push(`Сканировали повторно: ${d.repeats.length}`);
 
-  if (waiting.length) {
+  if (d.waiting.length) {
     out.push('', 'ЕЩЁ НЕ ПРИЕХАЛИ:');
-    for (const [list, recipients] of groupItems(waiting)) {
+    for (const [list, recipients] of groupItems(d.waiting)) {
       out.push(`— ${list}`);
       for (const [recipient, items] of recipients) {
         if (recipient) out.push(`  ${recipient}`);
@@ -50,16 +60,15 @@ export function buildReport(state, now = Date.now()) {
       }
     }
   }
-  if (state.unknown.length) {
+  if (d.unknown.length) {
     out.push('', 'ОТСКАНИРОВАНЫ, НО НЕТ В СПИСКЕ:');
-    state.unknown.forEach((u) => out.push(`  ${u.code}${u.count > 1 ? ` (×${u.count})` : ''}`));
+    d.unknown.forEach((u) => out.push(`  ${u.code}${u.count > 1 ? ` (×${u.count})` : ''}`));
   }
-  if (repeats.size) {
+  if (d.repeats.length) {
     out.push('', 'СКАНИРОВАЛИ ПОВТОРНО:');
-    const byTrack = new Map(state.items.map((it) => [it.track, it]));
-    for (const [track, count] of repeats) {
-      const it = byTrack.get(track);
-      out.push(`  ${track}${it ? ` · ${it.name} · ${it.recipient}` : ''} (повторов: ${count})`);
+    for (const { track, count, item } of d.repeats) {
+      const about = item ? [itemLine({ ...item, track: '' }), item.recipient].filter(Boolean).join(' · ') : '';
+      out.push(`  ${track}${about ? ` · ${about}` : ''} (повторов: ${count})`);
     }
   }
   return out.join('\n');
