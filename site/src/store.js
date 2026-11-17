@@ -18,7 +18,15 @@ function uid() {
 function normalizeState(raw) {
   const s = { ...emptyState(), ...raw };
   for (const k of ['lists', 'items', 'log', 'unknown']) if (!Array.isArray(s[k])) s[k] = [];
-  for (const it of s.items) it.track = String(it.track ?? '');
+  for (const it of s.items) {
+    it.track = String(it.track ?? '');
+    // Разбор до 14.11 строку «1. ТРЕК» без названия записывал как товар «1.»: номер переносим в n.
+    const num = !it.n && String(it.name ?? '').trim().match(/^(\d{1,4})[.)]$/);
+    if (num) {
+      it.n = num[1];
+      it.name = '';
+    }
+  }
   return s;
 }
 

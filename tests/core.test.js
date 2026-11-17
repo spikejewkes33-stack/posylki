@@ -270,3 +270,58 @@ test('PDF: в описании документа треки строками и
   assert.match(json, /"0012345678901"/);
   assert.match(json, /Ещё не приехали · 2/);
 });
+
+test('PDF: список посылок по закупкам и получателям, сначала не приехавшие, потом приехавшие', () => {
+  const store = createStore(memoryStorage());
+  store.importParsed(parseNote(NOTE_2), 'Список');
+  store.markByTrack('JT9002792964087', 'JT9002792964087', 1000);
+  const json = JSON.stringify(pdfDoc(store.view(), 0).content);
+  const waiting = json.indexOf('Ещё не приехали · 1');
+  const arrived = json.indexOf('Приехали · 1');
+  assert.ok(waiting > 0 && arrived > waiting);
+  assert.ok(json.indexOf('"Носки"') > waiting && json.indexOf('"Носки"') < arrived);
+  assert.ok(json.indexOf('"Шапка"') > arrived);
+  assert.match(json, /"Закуп нояб 10"/);
+  assert.match(json, /"Сева"/);
+  assert.match(json, /"Ожидается"/);
+  assert.match(json, /"Приехал \d\d\.\d\d \d\d:\d\d"/);
+
+  // Всё приехало: список всё равно есть.
+  store.markByTrack('0012345678901', '0012345678901', 2000);
+  const all = JSON.stringify(pdfDoc(store.view(), 0).content);
+  assert.match(all, /Всё приехало/);
+  assert.match(all, /Приехали · 2/);
+  assert.match(all, /"Носки"/);
+});
+
+test('два товара под одним треком: один скан отмечает оба, повтор — жёлтый', () => {
+  const store = createStore(memoryStorage());
+  store.importParsed(parseNote('Закуп\nСева\n1. Носки YT0719739925067\n2. Шапка YT0719739925067\n3. Чехол 777456551825815'), 'Список');
+  const first = store.markByTrack('YT0719739925067', 'YT0719739925067', 10);
+  assert.equal(first.result, 'found');
+  assert.deepEqual(first.items.map((i) => i.name), ['Носки', 'Шапка']);
+  assert.ok(first.items.every((i) => i.arrivedAt === 10));
+  assert.deepEqual(store.stats(), { total: 3, arrived: 2, left: 1, percent: 66 });
+  const again = store.markByTrack('YT0719739925067', 'YT0719739925067', 20);
+  assert.equal(again.result, 'repeat');
+  assert.equal(again.items.length, 2);
+  assert.ok(again.items.every((i) => i.arrivedAt === 10)); // время первой отметки не меняется
+});
+
+test('поправка старых данных: товар «1.» без номера становится номером 1 без названия', () => {
+  const item = (id, n, name) => ({ id, listId: 'l1', list: 'Закуп', recipient: 'Ил', n, name, track: 'YT7640469574885', arrivedAt: null, arrivedBy: null });
+  const old = {
+    lists: [{ id: 'l1', title: 'Закуп', addedAt: 1 }],
+    items: [item('a', '', '1.'), item('b', '', '12)'), item('c', '', ' 3. '), item('d', '4', 'Штаны'), item('e', '', 'Боди'),
+      item('f', '5', '6.'), item('g', '', '2024 г.'), item('h', '', '')],
+    log: [],
+    unknown: [],
+  };
+  const storage = memoryStorage();
+  storage.setItem('parcel-scanner:v1', JSON.stringify(old));
+  const got = createStore(storage).state.items.map((i) => [i.n, i.name]);
+  assert.deepEqual(got, [['1', ''], ['12', ''], ['3', ''], ['4', 'Штаны'], ['', 'Боди'], ['5', '6.'], ['', '2024 г.'], ['', '']]);
+  // В копии из старой версии то же самое.
+  const fromBackup = createStore(memoryStorage()).readBackup(JSON.stringify(old)).data.items;
+  assert.deepEqual(fromBackup.map((i) => [i.n, i.name]), got);
+});

@@ -340,3 +340,5 @@ dialog::backdrop { background: rgb(0 0 0 / 0.4); }
 .item.log-repeat .name { color: #9a7400; }
 .item.log-unknown .dot { background: var(--bad); border-color: var(--bad); }
 .item.log-unknown .name { color: var(--bad); }
+.result-items { margin: 2px 0 4px; padding-left: 22px; font-size: 20px; font-weight: 600; }
+.result-items li { margin: 2px 0; }

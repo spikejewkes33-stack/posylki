@@ -130,6 +130,29 @@ function table(header, rows, widths) {
 
 const str = (v) => String(v ?? '');
 
+// Список посылок: закупка → получатель → строки «№, товар, трек, статус».
+function itemsTable(items) {
+  const group = (text, extra) => [{ text, colSpan: 4, bold: true, ...extra }, {}, {}, {}];
+  const body = [['№', 'Товар', 'Трек-номер', 'Статус'].map((t) => ({ text: t, bold: true }))];
+  for (const [list, recipients] of groupItems(items)) {
+    body.push(group(list, { fontSize: 11, fillColor: '#eef1f5', margin: [0, 3, 0, 3] }));
+    for (const [recipient, rows] of recipients) {
+      if (recipient) body.push(group(recipient, { margin: [0, 3, 0, 0] }));
+      for (const it of rows) {
+        const status = it.arrivedAt
+          ? { text: `Приехал ${fmtTime(it.arrivedAt)}`, color: '#188a42' }
+          : { text: 'Ожидается', color: '#9a7400' };
+        body.push([str(it.n), str(it.name), str(it.track), status]);
+      }
+    }
+  }
+  return {
+    table: { headerRows: 1, dontBreakRows: true, widths: ['auto', '*', 'auto', 'auto'], body },
+    layout: 'lightHorizontalLines',
+    margin: [0, 4, 0, 14],
+  };
+}
+
 export function pdfDoc(view, now = Date.now()) {
   const d = reportData(view);
   const content = [
@@ -143,13 +166,14 @@ export function pdfDoc(view, now = Date.now()) {
   ];
   if (d.waiting.length) {
     content.push({ text: `Ещё не приехали · ${d.waiting.length}`, fontSize: 13, bold: true });
-    content.push(table(
-      ['Закупка', 'Получатель', '№', 'Товар', 'Трек-номер'],
-      d.waiting.map((it) => [it.list, it.recipient, it.n, it.name, it.track].map(str)),
-      ['auto', 'auto', 'auto', '*', 'auto'],
-    ));
-  } else {
+    content.push(itemsTable(d.waiting));
+  } else if (d.total) {
     content.push({ text: 'Всё приехало', fontSize: 13, bold: true, color: '#188a42', margin: [0, 0, 0, 14] });
+  }
+  const arrived = view.items.filter((it) => it.arrivedAt);
+  if (arrived.length) {
+    content.push({ text: `Приехали · ${arrived.length}`, fontSize: 13, bold: true });
+    content.push(itemsTable(arrived));
   }
   if (d.unknown.length) {
     content.push({ text: `Отсканированы, но нет в списке · ${d.unknown.length}`, fontSize: 13, bold: true });

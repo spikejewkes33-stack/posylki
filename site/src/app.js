@@ -61,7 +61,16 @@ async function deliver(name, type, content) {
 
 async function saveBackup() {
   const r = await deliver(`posylki-kopiya-${today()}.json`, 'application/json', store.exportBackup());
-  if (r === 'shared' || r === 'downloaded') store.markBackedUp();
+  if (r === 'shared' || r === 'downloaded') {
+    store.markBackedUp();
+    sheet.onclose = null;
+    sheet.innerHTML = `<form method="dialog" class="sheet"><p class="ok-text">Копия сохранена ✅</p>
+      <p>Это файл для восстановления, открывать его не нужно: внутри служебный текст.</p>
+      <p>Чтобы вернуть данные: «Резервная копия» → «Вернуть данные из файла».</p>
+      <button class="primary" value="">Понятно</button></form>`;
+    sheet.returnValue = '';
+    sheet.showModal();
+  }
   return r;
 }
 
@@ -517,14 +526,14 @@ function renderBackup() {
   app.innerHTML = `
     ${header('Резервная копия')}
     <p class="hint">Все закупки, отметки и история — в одном файле. Сохрани его в «Файлы» или отправь себе в Telegram.
-      Если телефон сотрёт данные, их можно вернуть из этого файла.</p>
+      Если телефон сотрёт данные, их можно вернуть из этого файла. Открывать файл не нужно.</p>
     <div class="card"><b>Сейчас в телефоне: ${lists.length} ${plural(lists.length, 'закупка', 'закупки', 'закупок')},
       ${items.length} ${plural(items.length, 'посылка', 'посылки', 'посылок')}</b>
       <p class="hint">${backupAt ? `Последняя копия: ${fmtTime(backupAt)}` : 'Копию ещё не сохраняли.'}</p></div>
-    <button class="primary" id="save">Сохранить копию</button>
-    <h2>Вернуть из копии</h2>
-    <p class="hint">Всё, что сейчас в телефоне, заменится данными из файла.</p>
-    <label class="btn wide">Выбрать файл копии<input type="file" id="file" accept=".json,application/json" hidden></label>`;
+    <button class="primary" id="save">Сохранить копию в файл</button>
+    <h2>Вернуть данные из копии</h2>
+    <p class="hint">Выбери сохранённый файл копии. Всё, что сейчас в телефоне, заменится данными из него.</p>
+    <label class="btn wide">Вернуть данные из файла<input type="file" id="file" accept=".json,application/json" hidden></label>`;
   $('#save').onclick = async () => {
     if ((await saveBackup()) !== 'cancelled') renderBackup();
   };
@@ -676,6 +685,16 @@ function handleCodes(codes, manual, now = performance.now()) {
   for (const ev of events) showResult(ev);
 }
 
+// Что в посылке: один товар или явный список, если под треком несколько товаров.
+function resultItems(items) {
+  const who = [...new Set(items.map((i) => i.recipient))];
+  const whoLine = who.length === 1 && who[0] ? `<p class="result-who">${esc(who[0])}</p>` : '';
+  if (items.length === 1) return `<p class="result-name">${itemTitle(items[0])}</p>${whoLine}`;
+  const each = (i) => `<li>${itemTitle(i)}${who.length > 1 && i.recipient ? ` · ${esc(i.recipient)}` : ''}</li>`;
+  return `<p class="result-name">В посылке ${items.length} ${plural(items.length, 'товар', 'товара', 'товаров')}:</p>
+    <ul class="result-items">${items.map(each).join('')}</ul>${whoLine}`;
+}
+
 function showResult(ev) {
   let kind;
   let html;
@@ -683,10 +702,7 @@ function showResult(ev) {
     const { result, items } = store.markByTrack(ev.track, ev.code);
     kind = result;
     const first = items[0];
-    const more = items.length > 1 ? `<p>+ ещё ${items.length - 1}: ${items.slice(1).map((i) => esc(i.name)).join(', ')}</p>` : '';
-    html = `<p class="result-title">${RESULT_TEXT[kind]}</p>
-      <p class="result-name">${itemTitle(first)}</p>
-      <p class="result-who">${esc(first.recipient)}</p>${more}
+    html = `<p class="result-title">${RESULT_TEXT[kind]}</p>${resultItems(items)}
       <p class="mono">${esc(ev.track)}${result === 'repeat' ? ` · отмечен ${fmtTime(first.arrivedAt)}` : ''}</p>`;
   } else {
     kind = 'unknown';
