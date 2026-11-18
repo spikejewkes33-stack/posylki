@@ -91,21 +91,28 @@ export function createStore(storage = globalThis.localStorage) {
       return (shapes.prefixes.has(prefixOf(norm)) ? 2 : 0) + (shapes.lengths.has(norm.length) ? 1 : 0);
     },
 
-    /** Добавляет разобранную заметку новой закупкой. Позиции, которые уже есть в активных закупках, пропускает. */
+    /**
+     * Добавляет разобранную заметку новой закупкой. Позиции, которые уже есть в активных закупках, пропускает.
+     * Одинаковые строки внутри заметки (2 шт. одного товара под одним треком) — разные позиции:
+     * пропускается ровно столько копий, сколько их уже есть в активных закупках.
+     */
     importParsed(parsed, fallbackTitle) {
       const listId = uid();
       const title = parsed.title || fallbackTitle;
       const now = Date.now();
-      const exists = new Set(active.map((it) => `${it.track}|${it.name}|${it.recipient}`));
+      const keyOf = (it) => `${it.track}|${it.name}|${it.recipient}`;
+      const exists = new Map();
+      for (const it of active) exists.set(keyOf(it), (exists.get(keyOf(it)) || 0) + 1);
       let added = 0;
       let skipped = 0;
       for (const p of parsed.items) {
-        const key = `${p.track}|${p.name}|${p.recipient}`;
-        if (exists.has(key)) {
+        const key = keyOf(p);
+        const left = exists.get(key) || 0;
+        if (left > 0) {
+          exists.set(key, left - 1);
           skipped++;
           continue;
         }
-        exists.add(key);
         state.items.push({
           id: uid() + added,
           listId,

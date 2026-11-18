@@ -294,6 +294,17 @@ test('PDF: список посылок по закупкам и получате
   assert.match(all, /"Носки"/);
 });
 
+test('одинаковые строки с одним треком не пропадают: 6 позиций, номера подряд, повторный импорт не дублирует', () => {
+  const note = 'Закуп Закупка от 17.11.2026\nАнастасия\n1. Пижама женская 79158624862655\n2. Кепка женская 79158929242672\n'
+    + '3. Термобельё детское 465856214068314\n4. Термобельё детское 465856214068314\n5. Брюки 465857233364814\n'
+    + 'Юлия\n6. Вилки 777462698951021\n';
+  const store = createStore(memoryStorage());
+  assert.deepEqual(store.importParsed(parseNote(note), 'Список'), { added: 6, skipped: 0 });
+  assert.deepEqual(store.state.items.map((i) => i.n), ['1', '2', '3', '4', '5', '6']);
+  assert.deepEqual(store.importParsed(parseNote(note), 'Список'), { added: 0, skipped: 6 });
+  assert.equal(store.markByTrack('465856214068314', '465856214068314').items.length, 2);
+});
+
 test('два товара под одним треком: один скан отмечает оба, повтор — жёлтый', () => {
   const store = createStore(memoryStorage());
   store.importParsed(parseNote('Закуп\nСева\n1. Носки YT0719739925067\n2. Шапка YT0719739925067\n3. Чехол 777456551825815'), 'Список');
