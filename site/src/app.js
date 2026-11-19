@@ -89,7 +89,6 @@ function renderHome() {
   const lists = store.purchases().filter((p) => !p.archivedAt).map((p) => p.title).join(' · ');
   app.innerHTML = `
     <header class="app-head">
-      <p class="banner">как жаль сегодня Илонину жопу вечером</p>
       <h1>📦 Посылки</h1>
       <p>${lists ? esc(lists) : 'Приёмка посылок по штрихкоду'}</p>
     </header>
