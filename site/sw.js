@@ -1,6 +1,6 @@
 // Работа без интернета: все файлы приложения лежат в кэше телефона.
 // Открывается из кэша сразу, а в фоне проверяется новая версия (появится при следующем запуске).
-const CACHE = 'parcel-scanner-v5';
+const CACHE = 'parcel-scanner-v6';
 const FILES = [
   './',
   'index.html',
@@ -24,6 +24,7 @@ const FILES = [
   'src/scanner.js',
   'src/feedback.js',
   'src/files.js',
+  'src/dates.js',
 ];
 
 self.addEventListener('install', (event) => {

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { parseNote, normalizeTrack } from '../site/src/parse.js';
 import { ScanFilter } from '../site/src/scanfilter.js';
 import { createStore } from '../site/src/store.js';
+import { dateKey, dateFromTitle, fmtDate } from '../site/src/dates.js';
 import { buildReport, buildNoteText, excelSheets, pdfDoc } from '../site/src/report.js';
 import writeExcelFile from 'write-excel-file/node';
 import { unzipSync, strFromU8 } from 'fflate';
@@ -161,7 +162,8 @@ test('старые данные (до закупок с архивом) откр
   const storage = memoryStorage();
   storage.setItem('parcel-scanner:v1', JSON.stringify(old));
   const store = createStore(storage);
-  assert.deepEqual(store.state, old);
+  // Всё как было, у закупки появилась дата — день создания.
+  assert.deepEqual(store.state, { ...old, lists: [{ ...old.lists[0], date: dateKey(1) }] });
   assert.deepEqual(store.stats(), { total: 2, arrived: 1, left: 1, percent: 50 });
   assert.equal(store.lookup('0012345678901'), '0012345678901');
   const [p] = store.purchases();
@@ -336,3 +338,117 @@ test('поправка старых данных: товар «1.» без но�
   const fromBackup = createStore(memoryStorage()).readBackup(JSON.stringify(old)).data.items;
   assert.deepEqual(fromBackup.map((i) => [i.n, i.name]), got);
 });
+
+// ---------- закупки отдельно: дата, сверка с одной закупкой, закрытие (20.11) ----------
+
+const PURCHASE_A = `Закупка от 17.11
+
+Анна
+1. Платье YT0812345678901
+2. Сумка STL240011223344`;
+const PURCHASE_B = `Закуп 19.11
+
+Олег
+1. Чехол 777456223344556
+2. Кошелёк YT0798765432101
+3. Носки YT0812345678901`;
+
+function twoPurchases() {
+  const store = createStore(memoryStorage());
+  store.importParsed(parseNote(PURCHASE_A), 'А');
+  store.importParsed(parseNote(PURCHASE_B), 'Б');
+  const [a, b] = store.state.lists;
+  return { store, a: a.id, b: b.id };
+}
+
+test('дата закупки из названия, иначе день создания', () => {
+  const created = new Date(2026, 10, 20, 10).getTime();
+  assert.equal(dateFromTitle('Закуп нояб 9', created), '2026-11-09');
+  assert.equal(dateFromTitle('9 ноября', created), '2026-11-09');
+  assert.equal(dateFromTitle('Закупка от 17', created), '2026-11-17');
+  assert.equal(dateFromTitle('Закупка от 30', created), '2026-10-30'); // 30-е ещё не наступило — прошлый месяц
+  assert.equal(dateFromTitle('Закуп 14.11', created), '2026-11-14');
+  assert.equal(dateFromTitle('Закуп 01.12.2025', created), '2025-12-01');
+  assert.equal(dateFromTitle('Закуп янв 3', new Date(2026, 11, 30).getTime()), '2027-01-03');
+  assert.equal(dateFromTitle('Закупка маршрут 5', created), null);
+  assert.equal(dateFromTitle('Закуп 31.02', created), null);
+  assert.equal(dateFromTitle('Тест закуп 1', created), null);
+  assert.equal(fmtDate('2026-11-17', created), '17 ноября');
+  assert.equal(fmtDate('2025-12-01', created), '1 декабря 2025');
+
+  const store = createStore(memoryStorage());
+  store.importParsed(parseNote('Тест закуп 1\nАнна\n1. Платье YT0812345678901'), 'Тест');
+  assert.equal(store.state.lists[0].date, dateKey(store.state.lists[0].addedAt));
+});
+
+test('код из закупки А при скане в закупке Б не отмечается, а подписывается «из закупки А»', () => {
+  const { store, a, b } = twoPurchases();
+  assert.equal(store.lookup('STL240011223344'), 'STL240011223344'); // сканер видит код...
+  const r = store.markByTrack('STL240011223344', 'STL240011223344', 100, b);
+  assert.equal(r.result, 'other'); // ...но в закупке Б он чужой
+  assert.deepEqual(r.lists, ['Закупка от 17.11']);
+  assert.equal(r.items[0].name, 'Сумка');
+  assert.equal(store.stats(a).arrived, 0); // в А не отмечен
+  assert.equal(store.stats(b).arrived, 0);
+  assert.equal(store.state.log.at(-1).result, 'other');
+  assert.equal(store.state.log.at(-1).listId, b);
+
+  // Трек есть в обеих: в Б отмечается только посылка Б.
+  assert.equal(store.markByTrack('YT0812345678901', 'YT0812345678901', 101, b).result, 'found');
+  assert.deepEqual(store.view(b).items.filter((i) => i.arrivedAt).map((i) => i.name), ['Носки']);
+  assert.equal(store.stats(a).arrived, 0);
+
+  // Чужой код запоминается за закупкой, в которой его сканировали.
+  store.addUnknown('JT5599887766554', 102, b);
+  assert.equal(store.view(b).unknown.length, 1);
+  assert.equal(store.view(a).unknown.length, 0);
+  assert.equal(buildReport(store.view(a)).includes('JT5599887766554'), false);
+  store.removeUnknown('JT5599887766554', b);
+  assert.equal(store.state.unknown.length, 0);
+});
+
+test('дату закупки меняют вручную: товары, коды и отметки остаются', () => {
+  const { store, a, b } = twoPurchases();
+  store.markByTrack('STL240011223344', 'STL240011223344', 100, a);
+  const before = structuredClone(store.state.items);
+  assert.equal(store.setDate(a, '2026-11-01'), true);
+  assert.equal(store.state.lists.find((l) => l.id === a).date, '2026-11-01');
+  assert.deepEqual(store.state.items, before);
+  assert.equal(store.setDate(a, ''), false); // пустое поле не стирает дату
+  assert.equal(store.setDate(a, '2026-02-30'), false);
+  assert.equal(store.state.lists.find((l) => l.id === a).date, '2026-11-01');
+  // На главном новые по дате выше.
+  assert.deepEqual(store.purchases().map((p) => p.id), [b, a]);
+});
+
+test('закрытая закупка: в «Закрытых», данные целы, сканер её не сверяет, можно вернуть', () => {
+  const { store, a, b } = twoPurchases();
+  store.markByTrack('YT0812345678901', 'YT0812345678901', 100, a);
+  store.addUnknown('JT5599887766554', 101, a);
+  const before = structuredClone({ items: store.state.items, unknown: store.state.unknown, log: store.state.log });
+  store.setArchived(a, true);
+  const closed = store.purchases().filter((p) => p.archivedAt);
+  assert.deepEqual(closed.map((p) => p.id), [a]);
+  assert.deepEqual(store.purchases().filter((p) => !p.archivedAt).map((p) => p.id), [b]);
+  assert.deepEqual({ items: store.state.items, unknown: store.state.unknown, log: store.state.log }, before);
+  assert.equal(store.view(a).items.length, 2); // открыть для просмотра
+  assert.equal(store.view(a).unknown.length, 1);
+  assert.equal(store.lookup('STL240011223344'), null); // код только из закрытой — не сверяется
+  assert.equal(store.markByTrack('YT0812345678901', 'YT0812345678901', 102, b).result, 'found'); // в Б свой
+  store.setArchived(a, false);
+  assert.equal(store.lookup('STL240011223344'), 'STL240011223344');
+  assert.equal(store.purchases().filter((p) => !p.archivedAt).length, 2);
+});
+
+test('старые сканирования без закупки считаются в отчёте закупки по треку', () => {
+  const { store, a, b } = twoPurchases();
+  store.state.log.push({ at: 1, code: 'STL240011223344', track: 'STL240011223344', result: 'repeat' }); // как до 20.11
+  store.markByTrack('YT0812345678901', 'YT0812345678901', 2, b);
+  store.markByTrack('YT0812345678901', 'YT0812345678901', 3, b); // повтор в Б
+  assert.deepEqual(reportDataRepeats(store.view(a)), ['STL240011223344']);
+  assert.deepEqual(reportDataRepeats(store.view(b)), ['YT0812345678901']);
+});
+
+function reportDataRepeats(view) {
+  return buildReport(view).split('СКАНИРОВАЛИ ПОВТОРНО:')[1]?.trim().split('\n').map((l) => l.trim().split(' ')[0]) ?? [];
+}

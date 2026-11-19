@@ -28,8 +28,10 @@ export function reportData(view) {
   const waiting = view.items.filter((it) => !it.arrivedAt);
   const byTrack = new Map(view.items.map((it) => [it.track, it]));
   const counts = new Map();
+  // Сканирование до 20.11 не знает закупку (listId) — считается везде, где есть трек.
+  const own = (e) => view.id === 'all' || !e.listId || e.listId === view.id;
   for (const e of view.log) {
-    if (e.result === 'repeat' && byTrack.has(e.track)) counts.set(e.track, (counts.get(e.track) || 0) + 1);
+    if (e.result === 'repeat' && byTrack.has(e.track) && own(e)) counts.set(e.track, (counts.get(e.track) || 0) + 1);
   }
   return {
     total: view.items.length,

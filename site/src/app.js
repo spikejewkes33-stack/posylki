@@ -1,9 +1,11 @@
-// Экраны приложения. Маршрут в адресе: #/, #/scan, #/list/all|arrived|waiting[/закупка], #/unknown, #/import,
-// #/report[/закупка], #/lists, #/purchase/<id|all>, #/history, #/backup
+// Экраны приложения. Каждая закупка — отдельно: открыл её и работаешь только с ней.
+// Маршрут в адресе: #/ (активные закупки), #/purchase/<id|all>, #/scan/<id>, #/list/all|arrived|waiting[/id],
+// #/unknown[/id], #/report[/id], #/lists (закрытые закупки), #/import, #/history, #/backup
 import { parseNote } from './parse.js';
 import { createStore } from './store.js';
 import { ScanFilter } from './scanfilter.js';
 import { buildReport, buildNoteText, groupItems, reportData, fmtTime } from './report.js';
+import { fmtDate } from './dates.js';
 import { makeXlsx, makePdf, shareFile, preloadExports, XLSX_TYPE } from './files.js';
 import { openCamera, closeCamera, createScanLoop, decodeImage, torchControl, zoomControl, listCameras } from './scanner.js';
 import { unlockAudio, signal, soundOn, setSound } from './feedback.js';
@@ -84,45 +86,27 @@ function itemTitle(it) {
 
 // ---------- главный экран ----------
 function renderHome() {
-  const s = store.stats();
-  const unknown = store.state.unknown.length;
-  const lists = store.purchases().filter((p) => !p.archivedAt).map((p) => p.title).join(' · ');
+  const all = store.purchases();
+  const active = all.filter((p) => !p.archivedAt);
+  const closed = all.length - active.length;
   app.innerHTML = `
     <header class="app-head">
       <h1>📦 Посылки</h1>
-      <p>${lists ? esc(lists) : 'Приёмка посылок по штрихкоду'}</p>
+      <p>Приёмка посылок по штрихкоду</p>
     </header>
-    <section class="stats">
-      <div class="stat"><b>${s.total}</b><span>Всего</span></div>
-      <div class="stat ok"><b>${s.arrived}</b><span>Приехало</span></div>
-      <div class="stat"><b>${s.left}</b><span>Осталось</span></div>
-      <div class="stat"><b>${s.percent}%</b><span>Готово</span></div>
-      <div class="progress"><i style="width:${s.percent}%"></i></div>
-    </section>
-    ${s.total ? '' : `<p class="hint">Открой заметку со списком, нажми «Выбрать все» → «Скопировать», потом здесь «Добавить список».</p>`}
-    <button class="scan-btn" id="scan">СКАНИРОВАТЬ</button>
-    <nav class="grid">
-      <a class="tile" href="#/list/all"><b>${s.total}</b>ВЕСЬ СПИСОК</a>
-      <a class="tile ok" href="#/list/arrived"><b>${s.arrived}</b>ПРИЕХАЛИ</a>
-      <a class="tile wait" href="#/list/waiting"><b>${s.left}</b>ОЖИДАЮТСЯ</a>
-      <a class="tile bad" href="#/unknown"><b>${unknown}</b>НЕ НАЙДЕНЫ</a>
-    </nav>
+    ${active.length
+      ? active.map((p) => purchaseCard(p)).join('')
+      : `<p class="hint">Открой заметку со списком, нажми «Выбрать все» → «Скопировать», потом здесь «Добавить список».</p>`}
+    <a class="btn wide" href="#/import">＋ Добавить список</a>
     <div class="row">
-      <a class="btn" href="#/import">＋ Добавить список</a>
-      <a class="btn" href="#/lists">Закупки</a>
-    </div>
-    <div class="row">
-      <a class="btn" href="#/report">Отчёт</a>
+      <a class="btn" href="#/lists">Закрытые закупки${closed ? ` · ${closed}` : ''}</a>
       <a class="btn" href="#/history">История</a>
     </div>
     <div class="row links">
       <a class="link" href="#/backup">Резервная копия</a>
       <button class="link danger" id="clear">Очистить всё</button>
-    </div>`;
-  $('#scan').onclick = () => {
-    unlockAudio();
-    go('#/scan');
-  };
+    </div>
+    ${active.length > 1 ? '<a class="link" href="#/purchase/all">Все активные закупки вместе</a>' : ''}`;
   $('#clear').onclick = () => {
     if (!store.state.items.length && !store.state.unknown.length) return;
     if (confirm('Удалить все закупки, отметки и историю? Сначала лучше сохранить резервную копию.')) {
@@ -193,7 +177,7 @@ function renderImport() {
     const { added, skipped } = store.importParsed(parsed, `Список от ${fmtTime(Date.now())}`);
     navigator.storage?.persist?.().catch(() => {});
     toast(`Добавлено: ${added}${skipped ? `, уже были: ${skipped}` : ''}`);
-    go('#/');
+    go(added ? purchaseHash(store.state.lists.at(-1).id) : '#/');
   };
 }
 
@@ -278,18 +262,19 @@ function openItem(id, onChange) {
 }
 
 // ---------- не найдены ----------
-function renderUnknown() {
-  const list = [...store.state.unknown].sort((a, b) => b.lastAt - a.lastAt);
+function renderUnknown(listId) {
+  const list = [...store.view(listId).unknown].sort((a, b) => b.lastAt - a.lastAt);
+  const title = store.view(listId).title;
   app.innerHTML = `
-    ${header('Не найдены')}
-    <p class="hint">Отсканированы, но этих номеров нет в списке.</p>
+    ${header('Не найдены', listId && listId !== 'all' ? purchaseHash(listId) : '#/')}
+    <p class="hint">${title ? `${esc(title)}. ` : ''}Отсканированы, но этих номеров нет в списке.</p>
     ${list.length ? '<button class="btn" id="copy">Скопировать все номера</button>' : ''}
     <div id="items">${
       list
         .map(
           (u) => `<div class="item is-bad"><i class="dot"></i><span><span class="mono">${esc(u.code)}</span>
             <small>${fmtTime(u.lastAt)}${u.count > 1 ? ` · сканировали ${u.count} раза` : ''}</small></span>
-            <button class="link" data-code="${esc(u.code)}">Убрать</button></div>`,
+            <button class="link" data-code="${esc(u.code)}" data-list="${esc(u.listId ?? '')}">Убрать</button></div>`,
         )
         .join('') || '<p class="hint">Пусто.</p>'
     }</div>`;
@@ -297,8 +282,8 @@ function renderUnknown() {
   $('#items').onclick = (e) => {
     const code = e.target.dataset?.code;
     if (code) {
-      store.removeUnknown(code);
-      renderUnknown();
+      store.removeUnknown(code, e.target.dataset.list || null);
+      renderUnknown(listId);
     }
   };
 }
@@ -326,7 +311,7 @@ function renderReport(listId) {
     `<div class="stat"><b>${d.total}</b><span>Всего</span></div>`,
     `<div class="stat ok"><b>${d.arrived}</b><span>Приехало</span></div>`,
     `<div class="stat"><b>${d.waiting.length}</b><span>Осталось</span></div>`,
-    single ? '' : `<div class="stat bad"><b>${d.unknown.length}</b><span>Нет в списке</span></div>`,
+    `<div class="stat bad"><b>${d.unknown.length}</b><span>Нет в списке</span></div>`,
     `<div class="stat warn"><b>${d.repeats.length}</b><span>Повторно</span></div>`,
   ].filter(Boolean);
   app.innerHTML = `
@@ -386,62 +371,70 @@ function plural(n, one, few, many) {
   return many;
 }
 
-function purchaseCard(p, href = purchaseHash(p.id)) {
-  return `<a class="purchase ${p.archivedAt ? 'is-archived' : ''}" href="${href}">
+function purchaseCard(p) {
+  return `<a class="purchase ${p.archivedAt ? 'is-archived' : ''}" href="${purchaseHash(p.id)}">
     <b>${esc(p.title)}</b>
-    <span>${p.total} ${plural(p.total, 'посылка', 'посылки', 'посылок')} · приехало ${p.arrived}</span>
+    <span>${fmtDate(p.date)} · ${p.total} ${plural(p.total, 'товар', 'товара', 'товаров')}</span>
+    <span>Отсканировано ${p.arrived} из ${p.total}</span>
     <div class="progress"><i style="width:${p.percent}%"></i></div></a>`;
 }
 
 function renderLists() {
-  const all = store.purchases();
-  const active = all.filter((p) => !p.archivedAt);
-  const archived = all.filter((p) => p.archivedAt);
+  const closed = store.purchases().filter((p) => p.archivedAt);
   app.innerHTML = `
-    ${header('Закупки')}
-    ${active.length > 1 ? purchaseCard({ title: 'Все активные', ...store.stats() }, '#/purchase/all') : ''}
-    <h2>Активные · ${active.length}</h2>
-    ${active.map((p) => purchaseCard(p)).join('') || '<p class="hint">Нет активных закупок.</p>'}
-    <a class="btn wide" href="#/import">＋ Добавить список</a>
-    ${archived.length ? `<h2>Архив · ${archived.length}</h2>
-      <p class="hint">Завершённые закупки. Сканер их не сверяет, на главном они не считаются.</p>
-      ${archived.map((p) => purchaseCard(p)).join('')}` : ''}`;
+    ${header('Закрытые закупки')}
+    <p class="hint">Не видны на главном, сканер их не сверяет. Все данные сохранены: открой, чтобы посмотреть или вернуть в активные.</p>
+    ${closed.map((p) => purchaseCard(p)).join('') || '<p class="hint">Закрытых закупок нет.</p>'}`;
 }
 
 function renderPurchase(id) {
   const isAll = id === 'all';
   const p = isAll ? null : store.purchases().find((x) => x.id === id);
-  if (!isAll && !p) return go('#/lists');
+  if (!isAll && !p) return go('#/');
   const s = store.stats(id);
-  const q = isAll ? '' : `/${encodeURIComponent(id)}`;
+  const unknown = store.view(id).unknown.length;
+  const q = `/${encodeURIComponent(id)}`;
   app.innerHTML = `
-    ${header(isAll ? 'Все активные' : p.title, '#/lists')}
-    ${p?.archivedAt ? `<p class="note">В архиве с ${fmtTime(p.archivedAt)}. Сканер её не сверяет.</p>` : ''}
+    ${header(isAll ? 'Все активные закупки' : p.title, p?.archivedAt ? '#/lists' : '#/')}
+    ${isAll ? '<p class="hint">Все активные закупки вместе. Сканировать — внутри каждой закупки.</p>' : `
+      <label class="date-row">Дата закупки<input type="date" id="date" value="${esc(p.date)}"></label>`}
+    ${p?.archivedAt ? `<p class="note">Закупка закрыта ${fmtTime(p.archivedAt)}. Сканер её не сверяет, все данные сохранены.</p>` : ''}
     <section class="stats">
       <div class="stat"><b>${s.total}</b><span>Всего</span></div>
       <div class="stat ok"><b>${s.arrived}</b><span>Приехало</span></div>
       <div class="stat"><b>${s.left}</b><span>Осталось</span></div>
       <div class="stat"><b>${s.percent}%</b><span>Готово</span></div>
       <div class="progress"><i style="width:${s.percent}%"></i></div>
+      <p class="progress-text">Отсканировано ${s.arrived} из ${s.total}, осталось ${s.left}</p>
     </section>
+    ${isAll || p.archivedAt ? '' : '<button class="scan-btn" id="scan">СКАНИРОВАТЬ</button>'}
     <nav class="grid top">
       <a class="tile" href="#/list/all${q}"><b>${s.total}</b>ВЕСЬ СПИСОК</a>
       <a class="tile ok" href="#/list/arrived${q}"><b>${s.arrived}</b>ПРИЕХАЛИ</a>
       <a class="tile wait" href="#/list/waiting${q}"><b>${s.left}</b>ОЖИДАЮТСЯ</a>
-      <a class="tile" href="#/report${q}"><b>📄</b>ОТЧЁТ</a>
+      <a class="tile bad" href="#/unknown${q}"><b>${unknown}</b>НЕ НАЙДЕНЫ</a>
     </nav>
+    <a class="btn wide" href="#/report${q}">Отчёт</a>
     ${isAll ? '' : `
-      <button class="btn wide" id="archive">${p.archivedAt ? 'Вернуть в работу' : 'Завершить — убрать в архив'}</button>
+      <button class="btn wide" id="archive">${p.archivedAt ? 'Вернуть в активные' : 'Закрыть закупку'}</button>
       <button class="link danger" id="delete">Удалить закупку</button>`}`;
   if (isAll) return;
+  $('#scan')?.addEventListener('click', () => {
+    unlockAudio();
+    go(`#/scan${q}`);
+  });
+  $('#date').onchange = (e) => {
+    if (store.setDate(id, e.target.value)) toast(`Дата: ${fmtDate(e.target.value)}`);
+    else e.target.value = p.date; // очистили поле — оставляем прежнюю дату
+  };
   $('#archive').onclick = () => {
     if (p.archivedAt) {
       store.setArchived(id, false);
-      toast('Закупка снова в работе');
+      toast('Закупка снова в активных');
     } else {
-      if (s.left && !confirm(`Ещё не приехали: ${s.left}. Всё равно завершить? Сканер перестанет сверять эту закупку.`)) return;
+      if (s.left && !confirm(`Ещё не приехали: ${s.left}. Всё равно закрыть? Закупка уйдёт в «Закрытые закупки», данные сохранятся.`)) return;
       store.setArchived(id, true);
-      toast('Закупка в архиве');
+      toast('Закупка закрыта');
     }
     renderPurchase(id);
   };
@@ -450,13 +443,13 @@ function renderPurchase(id) {
     if (!confirm(`Удалить закупку «${p.title}» целиком: ${what} с отметками? Вернуть можно только из резервной копии.`)) return;
     store.deleteList(id);
     toast('Закупка удалена');
-    go('#/lists');
+    go('#/');
   };
 }
 
 // ---------- история сканирований ----------
-const LOG_FILTERS = [['all', 'Все'], ['found', 'Приехал'], ['repeat', 'Повтор'], ['unknown', 'Нет в списке']];
-const LOG_LABEL = { found: 'Приехал', repeat: 'Повтор', unknown: 'Нет в списке' };
+const LOG_FILTERS = [['all', 'Все'], ['found', 'Приехал'], ['repeat', 'Повтор'], ['unknown', 'Нет в списке'], ['other', 'Другая закупка']];
+const LOG_LABEL = { found: 'Приехал', repeat: 'Повтор', unknown: 'Нет в списке', other: 'Из другой закупки' };
 const LOG_PAGE = 200;
 
 function renderHistory() {
@@ -559,12 +552,16 @@ function renderBackup() {
 }
 
 // ---------- сканирование ----------
-let scan = null; // { stream, loop, filter, session }
+let scan = null; // { listId, stream, loop, filter, session }
 
-const RESULT_TEXT = { found: 'ПРИЕХАЛ', repeat: 'УЖЕ СКАНИРОВАЛИ', unknown: 'НЕТ В СПИСКЕ' };
+const RESULT_TEXT = { found: 'ПРИЕХАЛ', repeat: 'УЖЕ СКАНИРОВАЛИ', unknown: 'НЕТ В СПИСКЕ', other: 'НЕ ИЗ ЭТОЙ ЗАКУПКИ' };
 
-function renderScan() {
-  const s = store.stats();
+// Сканер работает внутри одной активной закупки и сверяет только с ней.
+function renderScan(listId) {
+  const active = store.purchases().filter((p) => !p.archivedAt);
+  const p = active.find((x) => x.id === listId) ?? (listId ? null : active.length === 1 ? active[0] : null);
+  if (!p) return go(listId ? purchaseHash(listId) : '#/');
+  const s = store.stats(p.id);
   app.innerHTML = `
     <section class="scanner">
       <video id="video" playsinline muted></video>
@@ -577,7 +574,8 @@ function renderScan() {
         <button class="pill" id="torch" hidden>🔦</button>
         <button class="pill" id="cam">📷</button>
       </header>
-      <div class="result" id="result"><p class="result-title">Наведи камеру на штрихкод</p></div>
+      <div class="result" id="result"><p class="result-title">Наведи камеру на штрихкод</p>
+        <p class="result-who">Закупка «${esc(p.title)}»</p></div>
       <footer class="scan-bottom">
         <span id="session">✓ 0 · ✗ 0 · ↺ 0</span>
         <label class="pill">Из фото<input type="file" id="photo" accept="image/*" hidden></label>
@@ -586,9 +584,9 @@ function renderScan() {
       <div class="flash" id="flash"></div>
     </section>`;
   document.body.classList.add('dark');
-  scan = { stream: null, loop: null, filter: new ScanFilter(), session: { found: 0, unknown: 0, repeat: 0 }, torchOn: false };
+  scan = { listId: p.id, stream: null, loop: null, filter: new ScanFilter(), session: { found: 0, unknown: 0, repeat: 0 }, torchOn: false };
 
-  $('#done').onclick = () => go('#/report');
+  $('#done').onclick = () => go(`#/report/${encodeURIComponent(p.id)}`);
   $('#sound').onclick = (e) => {
     setSound(!soundOn());
     e.target.textContent = soundOn() ? '🔊' : '🔇';
@@ -698,18 +696,21 @@ function showResult(ev) {
   let kind;
   let html;
   if (ev.type === 'match') {
-    const { result, items } = store.markByTrack(ev.track, ev.code);
+    const { result, items, lists } = store.markByTrack(ev.track, ev.code, Date.now(), scan.listId);
     kind = result;
     const first = items[0];
-    html = `<p class="result-title">${RESULT_TEXT[kind]}</p>${resultItems(items)}
+    const from = result === 'other' ? `<p class="result-name">Из закупки «${lists.map(esc).join('», «')}»</p>` : '';
+    html = `<p class="result-title">${RESULT_TEXT[kind]}</p>${from}${resultItems(items)}
       <p class="mono">${esc(ev.track)}${result === 'repeat' ? ` · отмечен ${fmtTime(first.arrivedAt)}` : ''}</p>`;
   } else {
     kind = 'unknown';
-    store.addUnknown(ev.code);
+    store.addUnknown(ev.code, Date.now(), scan.listId);
     html = `<p class="result-title">${RESULT_TEXT.unknown}</p><p class="mono big">${esc(ev.code)}</p>`;
   }
-  scan.session[kind]++;
-  signal(kind);
+  // «Не из этой закупки» звучит и считается как красный.
+  const signalKind = kind === 'other' ? 'unknown' : kind;
+  scan.session[signalKind]++;
+  signal(signalKind);
 
   const result = $('#result');
   const flash = $('#flash');
@@ -719,7 +720,7 @@ function showResult(ev) {
   flash.className = `flash ${kind}`;
   void flash.offsetWidth; // перезапуск анимации
   flash.classList.add('on');
-  const s = store.stats();
+  const s = store.stats(scan.listId);
   $('#count').textContent = `${s.arrived} из ${s.total}`;
   $('#session').textContent = `✓ ${scan.session.found} · ✗ ${scan.session.unknown} · ↺ ${scan.session.repeat}`;
 }
@@ -728,7 +729,7 @@ function showResult(ev) {
 document.addEventListener('visibilitychange', () => {
   if (!scan) return;
   if (document.hidden) stopScanning();
-  else if (location.hash === '#/scan') startScanning();
+  else if (location.hash.startsWith('#/scan')) startScanning();
 });
 
 // ---------- маршруты ----------
@@ -741,9 +742,9 @@ function route() {
   sheet.onclose = null;
   if (sheet.open) sheet.close();
   const [, page, arg, arg2] = (location.hash || '#/').split('/').map((p) => decodeURIComponent(p));
-  if (page === 'scan') renderScan();
+  if (page === 'scan') renderScan(arg);
   else if (page === 'list') renderList(arg, arg2);
-  else if (page === 'unknown') renderUnknown();
+  else if (page === 'unknown') renderUnknown(arg);
   else if (page === 'import') renderImport();
   else if (page === 'report') renderReport(arg);
   else if (page === 'lists') renderLists();
